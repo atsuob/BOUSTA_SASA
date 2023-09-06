@@ -3,21 +3,8 @@ import requests
 from io import StringIO  # Importez StringIO depuis le module io
 from Bio import PDB
 import pandas as pd
+import math
 
-
-# création d'un dictionnaire avec les rayons de Van der Waals moyens des 10 atomes les plus fréquemment retrouvés
-vdw_radii = {
-    'H': 1.20,
-    'C': 1.70,
-    'N': 1.55,
-    'O': 1.52,
-    'S': 1.80,
-    'P': 1.80,
-    'MG': 1.50,
-    'FE': 1.80,
-    'ZN': 1.39,
-    'CA': 2.00,
-}
 
 
 # Function to generate points on a sphere uniformly
@@ -70,50 +57,68 @@ def atomic_coordinates(pdb_data):
     return df
 
 # function to calculate surface area 
-def calculate_surface_area(pdb_id, probe_radius):
+
+def calculate_surface_area(i, atom1, df, probe_radius=1.4):
+
+# création d'un dictionnaire avec les rayons de Van der Waals moyens des 10 atomes les plus fréquemment retrouvés
+    vdw_radii = {
+    'H': 1.20,
+    'C': 1.70,
+    'N': 1.55,
+    'O': 1.52,
+    'S': 1.80,
+    'P': 1.80,
+    'MG': 1.50,
+    'FE': 1.80,
+    'ZN': 1.39,
+    'CA': 2.00,}
+    name_atom1, coord_atom1, name_res, num_res = atom1["atom_name"], [atom1["x"], atom1["y"], atom1["z"]], atom1["res_name"], atom1["res_num"]
+    r_vdw_atom1 = vdw_radii.get(name_atom1, 1.5)
+    num_points = 10
+    points_on_sphere = generate_points_on_sphere(r_vdw_atom1, num_points)
+    points_on_sphere = points_on_sphere + coord_atom1
+    unaccessible_points = []
+    for j, atom2 in df.iterrows():
+        if i == j: continue
+        name_atom2, coord_atom2 = atom2["atom_name"], [atom2["x"], atom2["y"], atom2["z"]]
+        r_vdw_atom2 = vdw_radii.get(name_atom2, 1.5)
+        #distance = np.linalg.norm(np.array(coord_atom1) - np.array(coord_atom2))
+        distance = math.dist(coord_atom1, coord_atom2)
+        if distance < 5.0:
+            for k, point in enumerate(points_on_sphere):
+                if k not in unaccessible_points:
+                    coord_point_atom1 = [point[0], point[1], point[2]]
+                    #print ("distance entre atom1 et atom2 ", distance)
+                    #print (coord_point_atom1)
+                    #distance_point_atom2 = np.linalg.norm(np.array(coord_point_atom1) - np.array(coord_atom2))
+                    distance_point_atom2 = math.dist(coord_point_atom1, coord_atom2)
+                    print("la distance entre atom 1 et atom 2 :", distance_point_atom2 )
+                    compare = 2 * probe_radius + r_vdw_atom2
+                    print(compare)
+                    if distance_point_atom2 < compare:
+                        unaccessible_points.append(k)  
+
+    print(len(unaccessible_points))
+    ratio_exp = (num_points - len(unaccessible_points)) / num_points
+    atom_accessible_area = (4 * np.pi * (r_vdw_atom1 + probe_radius) ** 2) * ratio_exp
+
+
+    liste = [name_res, num_res, round(ratio_exp, 2), round(atom_accessible_area, 2)]
+    return liste
+
+def calculate_sasa(pdb_id):
     pdb_data = fetch_pdb_data(pdb_id)
-    print(pdb_data)
-    # Analyse de la structure PDB
-    parser = PDB.PDBParser(QUIET=True)
-    structure = parser.get_structure('protein', StringIO(pdb_data))
+    df = atomic_coordinates(pdb_data)
+    print (df)
+    results = []
 
-    atom_coords = []
-    for model in structure:
-        for chain in model:
-            for residue in chain:
-                for atom in residue:
-                    atom_coords.append(atom.get_coord())
-                    if atom.element != "H":  # exclure les atomes d'hydrogène
+    for i, atom1 in df.iterrows():
+        sasa_data = calculate_surface_area(i, atom1, df)
+        results.append(sasa_data)
 
-   
-                    # Calcul des points accessibles et de la surface accessible
-                        accessible_points = []
-                        num_points = 100  # Nombre de points sur la sphère
-                        points_on_sphere = generate_points_on_sphere(probe_radius, num_points)
-                        atom_areas = []
+    sasa_df = pd.DataFrame(results, columns=["Residue Name", "Residue Number", "Accessibility Ratio", "Atom Accessible Area"])
 
-                        for atom_coord in atom_coords:
-                                sphere = points_on_sphere + atom_coord
-                                for point in sphere:
-                                    is_accessible = True
-                                    for other_atom_coord in atom_coords:
-                                        if np.linalg.norm(point - other_atom_coord) - vdw_radii[atom.element] < probe_radius:
-                                            is_accessible = False
-                                            break
-                                    if is_accessible:
-                                        accessible_points.append(point)
-                                        print(f"Point {point} est accessible.")
-
-                                atom_accessible_area = len(accessible_points) * (4 * np.pi * (probe_radius)**2) / num_points
-                                atom_areas.append(atom_accessible_area)
-
-                        accessible_surface_area = sum(atom_areas)
-                        return accessible_surface_area     
-
-pdb_id = "1CRN"  # Remplacez par le PDB ID de votre protéine
-probe_radius = 1.4  # Rayon de la sonde (par exemple, pour l'oxygène)
-
-accessible_area = calculate_surface_area(pdb_id, probe_radius)
-
-print(f"Surface accessible absolue : {accessible_area:.2f} Å²")
-
+    # Calculez la somme totale des surfaces accessibles
+    total_surface_area = sasa_df["Atom Accessible Area"].sum()
+    
+    return sasa_df, total_surface_area  # Renvoie le DataFrame et la surface totale
